@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Con vật nhiều đốt — thiết kế lại</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{
+    --ui-bg: rgba(255,255,255,0.06);
+    --glass: rgba(255,255,255,0.08);
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+  canvas{display:block;background:linear-gradient(180deg,#041018 0%, #071927 100%);width:100vw;height:100vh}
+  .ui {
+    position: fixed;
+    left: 12px;
+    top: 12px;
+    padding: 10px;
+    border-radius: 10px;
+    background: var(--ui-bg);
+    color: #fff;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+    z-index: 10;
+  }
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  label{font-size:13px;opacity:0.9}
+  input[type=range]{width:180px}
+  button{background:var(--glass);border:1px solid rgba(255,255,255,0.06);color:#fff;padding:6px 8px;border-radius:6px;cursor:pointer}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="ui">
+  <div class="row"><label>Số đốt:</label><input id="seg" type="range" min="6" max="80" value="28"></div>
+  <div class="row"><label>Độ dày:</label><input id="th" type="range" min="4" max="40" value="12"></div>
+  <div class="row"><label>Tốc độ (nhạy):</label><input id="spd" type="range" min="0.02" max="1.2" step="0.02" value="0.28"></div>
+  <div class="row"><label>Color:</label>
+    <button id="c1">Gradient 1</button>
+    <button id="c2">Gradient 2</button>
+    <button id="c3">Neon</button>
+  </div>
+  <div class="row"><button id="reset">Đặt lại vị trí</button></div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: true });
+
+function resize(){
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+addEventListener('resize', resize, { passive:true });
+resize();
+
+// Input (mouse + touch)
+const input = { x: canvas.width/2, y: canvas.height/2, active: false };
+addEventListener('pointermove', (e)=>{ input.x = e.clientX; input.y = e.clientY; });
+addEventListener('pointerdown', ()=> input.active = true);
+addEventListener('pointerup', ()=> input.active = false);
+addEventListener('touchmove', (e)=>{ const t=e.touches[0]; if(t){ input.x=t.clientX; input.y=t.clientY } }, {passive:true});
+
+// Segment / creature parameters
+let SEGMENTS = 28;
+let BASE_SIZE = 12;
+let SENSITIVITY = 0.28;
+
+// Colors
+const palettes = [
+  ['#ffd47a', '#ff7a7a', '#ff3b3b'],          // warm
+  ['#7af0ff','#6bd0ff','#2ea6ff'],           // cool
+  ['#8eff6b','#6bffd8','#42f5ff']            // neon-ish
+];
+let paletteIndex = 0;
+
+// Segment class (position + velocity)
+class Seg {
+  constructor(x,y,r){
+    this.x = x; this.y = y;
+    this.vx = 0; this.vy = 0;
+    this.r = r;
+  }
+}
+
+// Creature container
+class Creature {
+  constructor(n){
+    this.init(n);
+  }
+  init(n){
+    this.segments = [];
+    this.num = n;
+    for(let i=0;i<n;i++){
+      // place in cluster center
+      this.segments.push(new Seg(canvas.width/2, canvas.height/2, BASE_SIZE));
+    }
+    this.headTurn = 0;
+    this.time = 0;
+  }
+
+  update(dt){
+    this.time += dt;
+    // head follows input with spring (smooth)
+    const head = this.segments[0];
+    // compute vector from head to input
+    let dx = input.x - head.x;
+    let dy = input.y - head.y;
+    // spring-like acceleration
+    const k = SENSITIVITY * 5;   // stiffness
+    const damping = 0.85;        // damping
+    head.vx += dx * k * dt;
+    head.vy += dy * k * dt;
+    head.vx *= damping;
+    head.vy *= damping;
+    head.x += head.vx * dt * 60;
+    head.y += head.vy * dt * 60;
+
+    // subsequent segments follow the previous one with distance constraint + slight elastic
+    for(let i=1;i<this.num;i++){
+      const prev = this.segments[i-1];
+      const cur = this.segments[i];
+
+      // desired: be at distance = prev.r + cur.r (we use cur.r as length roughly)
+      let dx2 = cur.x - prev.x;
+      let dy2 = cur.y - prev.y;
+      let dist = Math.hypot(dx2, dy2) || 0.0001;
+      let target = (prev.r + cur.r) * 0.9; // slack factor
+      // move cur toward maintaining the target distance
+      let diff = dist - target;
+      // apply correction proportional to diff (stiffness decreases down the body)
+      let stiff = 0.12 + (1 - i/this.num)*0.28;
+      // velocity correction
+      cur.vx += (-dx2 / dist) * diff * stiff;
+      cur.vy += (-dy2 / dist) * diff * stiff;
+
+      // add slight wobble to make it organic
+      const wobble = Math.sin(this.time*3 + i*0.4) * (1 + i*0.06) * 0.2;
+      cur.vx += Math.cos(i*0.7 + this.time*2) * wobble * 0.02;
+      cur.vy += Math.sin(i*0.5 + this.time*1.6) * wobble * 0.02;
+
+      // damping and integrate
+      cur.vx *= 0.92;
+      cur.vy *= 0.92;
+      cur.x += cur.vx * dt * 60;
+      cur.y += cur.vy * dt * 60;
+    }
+
+    // optional: slight size tapering along body
+    for(let i=0;i<this.num;i++){
+      const t = i / (this.num-1);
+      this.segments[i].r = BASE_SIZE * (1 - t*0.7) + 1.2;
+    }
+  }
+
+  draw(ctx){
+    // draw a smooth ribbon using midpoints & quadratic curves
+    ctx.save();
+    // build left and right edge points based on normals
+    const left = [];
+    const right = [];
+
+    for(let i=0;i<this.num;i++){
+      const a = this.segments[i];
+      // direction: use next or previous to compute tangent
+      let nx, ny;
+      if(i < this.num-1){
+        nx = this.segments[i+1].x - a.x;
+        ny = this.segments[i+1].y - a.y;
+      } else {
+        nx = a.x - this.segments[i-1].x;
+        ny = a.y - this.segments[i-1].y;
+      }
+      const len = Math.hypot(nx, ny) || 0.0001;
+      // normal
+      const nxn = -ny/len;
+      const nyn = nx/len;
+      const w = a.r * 1.3; // width
+      left.push({x: a.x + nxn*w, y: a.y + nyn*w});
+      right.push({x: a.x - nxn*w, y: a.y - nyn*w});
+    }
+
+    // create gradient along body
+    const head = this.segments[0];
+    const tail = this.segments[this.num-1];
+    const grad = ctx.createLinearGradient(head.x, head.y, tail.x, tail.y);
+    const pal = palettes[paletteIndex];
+    grad.addColorStop(0, pal[0]);
+    grad.addColorStop(0.5, pal[1]);
+    grad.addColorStop(1, pal[2]);
+
+    // draw body shape by connecting left + reversed right
+    ctx.beginPath();
+    // smooth left side
+    for(let i=0;i<left.length;i++){
+      const p = left[i];
+      if(i===0) ctx.moveTo(p.x,p.y);
+      else {
+        const prev = left[i-1];
+        ctx.quadraticCurveTo(prev.x, prev.y, (prev.x + p.x)/2, (prev.y + p.y)/2);
+      }
+    }
+    // connect to right side reversed
+    for(let i=right.length-1;i>=0;i--){
+      const p = right[i];
+      const idx = right.length-1-i;
+      if(idx===0) {
+        const prev = left[left.length-1];
+        ctx.quadraticCurveTo(prev.x, prev.y, (prev.x + p.x)/2, (prev.y + p.y)/2);
+      } else {
+        const prev = right[i+1];
+        ctx.quadraticCurveTo(prev.x, prev.y, (prev.x + p.x)/2, (prev.y + p.y)/2);
+      }
+    }
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // subtle outline
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.stroke();
+
+    // draw head details (eyes)
+    ctx.save();
+    const h = head;
+    // eye direction: toward input
+    let ex = input.x - h.x, ey = input.y - h.y;
+    let ed = Math.hypot(ex, ey) || 1;
+    ex = ex / ed * (h.r*0.45);
+    ey = ey / ed * (h.r*0.45);
+
+    // left eye
+    ctx.beginPath();
+    ctx.ellipse(h.x - h.r*0.5 + ex*0.06, h.y - h.r*0.2 + ey*0.06, h.r*0.28, h.r*0.36, 0, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fill();
+    // right eye
+    ctx.beginPath();
+    ctx.ellipse(h.x + h.r*0.5 + ex*0.06, h.y - h.r*0.2 + ey*0.06, h.r*0.28, h.r*0.36, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // pupils
+    ctx.fillStyle = 'rgba(20,20,30,0.98)';
+    ctx.beginPath();
+    ctx.arc(h.x - h.r*0.5 + ex*0.18, h.y - h.r*0.2 + ey*0.18, h.r*0.12, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(h.x + h.r*0.5 + ex*0.18, h.y - h.r*0.2 + ey*0.18, h.r*0.12, 0, Math.PI*2);
+    ctx.fill();
+
+    // small glossy on eyes
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.arc(h.x - h.r*0.55, h.y - h.r*0.33, h.r*0.06, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(h.x + h.r*0.45, h.y - h.r*0.33, h.r*0.06, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.restore();
+    ctx.restore();
+  }
+}
+
+let creature = new Creature(SEGMENTS);
+
+// animation loop
+let last = performance.now();
+function loop(t){
+  const dt = Math.min(0.06, (t - last)/1000);
+  last = t;
+
+  // clear with alpha for slight trail effect
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  creature.update(dt);
+  creature.draw(ctx);
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// UI bindings
+document.getElementById('seg').addEventListener('input', (e)=>{
+  SEGMENTS = parseInt(e.target.value);
+  creature.init(SEGMENTS);
+});
+document.getElementById('th').addEventListener('input', (e)=>{
+  BASE_SIZE = parseFloat(e.target.value);
+  // update sizes immediately
+  for(let i=0;i<creature.segments.length;i++){
+    creature.segments[i].r = BASE_SIZE;
+  }
+});
+document.getElementById('spd').addEventListener('input', (e)=>{
+  SENSITIVITY = parseFloat(e.target.value);
+});
+
+document.getElementById('c1').addEventListener('click', ()=>{ paletteIndex = 0; });
+document.getElementById('c2').addEventListener('click', ()=>{ paletteIndex = 1; });
+document.getElementById('c3').addEventListener('click', ()=>{ paletteIndex = 2; });
+
+document.getElementById('reset').addEventListener('click', ()=>{
+  creature.init(SEGMENTS);
+});
+
+// init touch pointer fallback center
+addEventListener('touchstart', (e)=>{
+  const t = e.touches[0];
+  if(t){ input.x = t.clientX; input.y = t.clientY; }
+}, {passive:true});
+
+</script>
+</body>
+</html>
